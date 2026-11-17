@@ -14,6 +14,10 @@ from . import VERSION
 from . import protocol as P
 from .session import truth_label
 
+# v2 adds the raw class (before the stairs rule), the event flags and the posture state at the end
+LIVE_COLUMNS_V2_EXTRA = ['raw_class', 'raw_class_name', 'event_flags', 'sit_to_stand', 'stand_to_sit',
+                       'bed_transfer', 'posture']
+
 SESSION_SUFFIX = '_session.txt'
 TRUTH_LINE = '#TRUTH,'           # truth key in the session file (not a protocol line)
 
@@ -28,8 +32,9 @@ def _code(c: Optional[int]) -> str:
     return '' if c is None else str(c)
 
 
-def _class_name(c: int) -> str:
-    return P.CLASS_NAMES[c] if 0 <= c < P.N_CLASSES else ''
+def _class_name(c: int, version: int = 1) -> str:
+    names = P.class_names(version)
+    return names[c] if 0 <= c < len(names) else ''
 
 
 class Recorder:
@@ -45,7 +50,7 @@ class Recorder:
         self._lines_f = open(self.base + SESSION_SUFFIX, 'w', encoding='utf-8')
         self._live = csv.writer(self._live_f)
         self._raw = csv.writer(self._raw_f)
-        self._live.writerow(LIVE_COLUMNS)
+        self._live.writerow(LIVE_COLUMNS + LIVE_COLUMNS_V2_EXTRA)
         self._raw.writerow(RAW_COLUMNS)
         self._lines_f.write(f'# KNEIL live viewer {VERSION} session file (used for replay)\n'
                             f'# started {self.started.isoformat(timespec="seconds")}\n'
@@ -67,11 +72,15 @@ class Recorder:
     def live(self, p: P.Live, t: float, truth_now: Optional[int], truth_window: Optional[int],
              truth_window_smoothed: Optional[int]) -> None:
         pc_time, t_rec = self._times(t)
-        self._live.writerow([pc_time, t_rec, p.seq, p.t_ms, p.cls, _class_name(p.cls), p.cls_smooth,
-                             _class_name(p.cls_smooth), p.vote_pct, p.flags, int(p.selftest_ok), *p.mean_mg,
+        sts, s2s, bed = P.event_flags(p.events)
+        self._live.writerow([pc_time, t_rec, p.seq, p.t_ms, p.cls, _class_name(p.cls, p.version), p.cls_smooth,
+                             _class_name(p.cls_smooth, p.version), p.vote_pct, p.flags, int(p.selftest_ok), *p.mean_mg,
                              p.battery_mv, _code(truth_now), truth_label(truth_now), _code(truth_window),
                              truth_label(truth_window), _code(truth_window_smoothed),
-                             truth_label(truth_window_smoothed)])
+                             truth_label(truth_window_smoothed),
+                             ('' if not p.v2 else p.raw_cls), ('' if not p.v2 else _class_name(p.raw_cls, p.version)),
+                             ('' if not p.v2 else p.events), int(sts), int(s2s), int(bed),
+                             ('' if not p.v2 else P.posture_name(p.still_posture))])
         self.n_live += 1
 
     def raw(self, p: P.Raw, t: float, truth_of_sample: Callable[[int], Optional[int]]) -> None:

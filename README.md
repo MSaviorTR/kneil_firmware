@@ -8,7 +8,7 @@ A small USB bridge and a PC app show it live and measure how often it is right.
 ```
  KNEIL board (es4l15ba1, nRF54L15)                XIAO nRF52840 bridge          PC (Windows)
  BMA580 accelerometer 50 Hz, +/-8 g   --BLE-->    BLE central, USB serial  -->  KNEIL live viewer
- kneil_tinyml classifier (model V3)               (text lines L/R/I/B)          (PySide6 app / .exe)
+ kneil_tinyml classifier (model V4)               (text lines L/R/I/D/B)        (PySide6 app / .exe)
 ```
 
 The same repository also holds the original **NeiL** firmware for the same board (a simple BLE sensor app with
@@ -26,19 +26,20 @@ RTC-controlled power cycling), from which the KNEIL work started.
 | `boards/` | Board definition of the custom **es4l15ba1** module (nRF54L15) | [boards/README.md](boards/README.md) |
 | `docs/` | How to build and flash everything; library documentation | [docs/BUILD.md](docs/BUILD.md) |
 
-## Status (16-17 Nov 2026)
+## Status (17 Nov 2026)
 
 | Part | State |
 |---|---|
-| kneil_tinyml + model V3 | host test PASS (both models); on-board self-test PASS (27 vectors, 0 feature failures, 0 class mismatches) |
+| kneil_tinyml 2.0 + model V4 | host test PASS (both models, 16 vectors); 8 classes, 4 s window from the model header, stairs rule, R1 events, 40-byte summary |
 | Timing on nRF54L15 (128 MHz) | one classified window: mean 0.60 ms, max 1.0 ms (DWT cycle counter, 60 windows); a sample without classification: 1.4 us |
 | BMA580 | 50 Hz, +/-8 g, 1024-byte FIFO read every 0.5 s (no interrupt wire); axis check done: sensor axes = device axes |
-| KNEIL live firmware | advertises `KNEIL-xxxx`, LIVE every 1 s, RAW every 0.5 s, CONTROL, INFO; MTU 247; resets itself after a fault |
+| KNEIL live firmware | advertises `KNEIL-xxxx`, LIVE v2 every 1 s, RAW every 0.5 s, CONTROL, INFO, SUMMARY; MTU 247; resets itself after a fault |
 | Bridge | scan, connect (address or AUTO), reconnect after a link loss, LED states, B lines, 1200-baud-touch flashing |
-| PC viewer | live view, timeline, totals, ground-truth keys, confusion table, CSV recording, replay; `KNEIL_viewer.exe` |
+| PC viewer | live view, timeline, totals, ground-truth keys, confusion table, daily-summary panel (Q/Z), CSV recording with the v2 fields, replay of v1 and v2 sessions; `KNEIL_viewer.exe` |
 | Not done | accuracy tests with real movements (next step), z-axis offset calibration (about -45 mg), battery measurement, direct BLE from the PC (optional) |
 
-Flash/RAM of the KNEIL live build: 409,668 B of 1,428 KB flash (the forest model is 192 KB), 48,708 B of 188 KB RAM.
+Flash/RAM of the KNEIL live build (model V4, measured): 386,664 B of 1,428 KB flash (forest) and 51,632 B of 188 KB
+RAM; single-tree build 238,856 B / 51,632 B. With the V3 model it was 409,668 B / 48,708 B.
 
 ## Activity classes
 
@@ -95,3 +96,5 @@ The KNEIL live work followed these steps: (1) library module and on-board self-t
 cycle counter, (3) BMA580 FIFO and axis check, (4) text stream (replaced by the bridge: the board has no USB),
 (5) Bluetooth LE service and INFO packet, (6) vote share from the 20 trees; then the XIAO bridge and the PC
 viewer (parsers, demo mode, live view, ground truth, accuracy, recording, replay, Windows .exe).
+Step E (17 Nov 2026) moved to model V4: library 2.0, 8 classes, 4 s window, stairs rule, transition events, posture,
+protocol v2 (LIVE 22 bytes, SUMMARY characteristic) and the PC app support for both protocol versions.

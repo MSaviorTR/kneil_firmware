@@ -1,11 +1,12 @@
 /*
  * KNEIL BLE bridge for the Seeed XIAO nRF52840 (board target xiao_ble).
  *
- * The bridge is a BLE central. It connects to a KNEIL-xxxx device, subscribes to LIVE, RAW and INFO (if the
- * device has it), and writes every packet to the USB serial port as the text lines of the KNEIL live
- * protocol (section B: L, R and I lines, made by protocol/kneil_proto.c, shared with the KNEIL firmware). Commands S, P, T
- * from the PC are written to CONTROL as 0x10, 0x11, 0x12. The bridge adds only its own B lines (section C):
- *   PC -> bridge:  B,SCAN   B,CONNECT,<address>   B,CONNECT,AUTO   B,DISCONNECT   S   P   T
+ * The bridge is a BLE central. It connects to a KNEIL-xxxx device, subscribes to LIVE, RAW, INFO and SUMMARY (if the
+ * device has them), and writes every packet to the USB serial port as the text lines of the KNEIL live
+ * protocol (section B: L, R, I and D lines, made by protocol/kneil_proto.c, shared with the KNEIL firmware).
+ * LIVE v1 (20 bytes) and v2 (22 bytes) are both accepted. Commands S, P, T, Q, Z
+ * from the PC are written to CONTROL as 0x10, 0x11, 0x12, 0x13, 0x14. The bridge adds only its own B lines (section C):
+ *   PC -> bridge:  B,SCAN   B,CONNECT,<address>   B,CONNECT,AUTO   B,DISCONNECT   S   P   T   Q   Z
  *   bridge -> PC:  B,VERSION,<text>   B,FOUND,<name>,<address>,<rssi_dBm>   B,SCAN_DONE
  *                  B,STATE,<idle|scanning|connecting|connected|lost>,<name>,<address>,<rssi_dBm>,<mtu>
  *                  B,DROPS,<count>
@@ -241,6 +242,7 @@ static void writer_thread(void *a, void *b, void *c)
 	static struct pkt pk;
 	static kneil_live_t live;
 	static kneil_raw_t raw;
+	static kneil_summary_t summary;
 	static char line[KNEIL_LINE_MAX];
 
 	ARG_UNUSED(a);
@@ -254,6 +256,8 @@ static void writer_thread(void *a, void *b, void *c)
 			n = kneil_live_to_line(&live, line, sizeof(line));
 		} else if (kneil_raw_decode(pk.data, pk.len, &raw) == 0) {
 			n = kneil_raw_to_line(&raw, line, sizeof(line));
+		} else if (kneil_summary_decode(pk.data, pk.len, &summary) == 0) {
+			n = kneil_summary_to_line(&summary, line, sizeof(line));
 		} else {
 			n = kneil_info_to_line(pk.data, pk.len, line, sizeof(line));
 			if (n > 0) {
@@ -276,6 +280,7 @@ static struct bt_uuid_128 uuid_live = BT_UUID_INIT_128(KNEIL_UUID_ENCODE(KNEIL_U
 static struct bt_uuid_128 uuid_raw = BT_UUID_INIT_128(KNEIL_UUID_ENCODE(KNEIL_UUID_RAW));
 static struct bt_uuid_128 uuid_ctrl = BT_UUID_INIT_128(KNEIL_UUID_ENCODE(KNEIL_UUID_CONTROL));
 static struct bt_uuid_128 uuid_info = BT_UUID_INIT_128(KNEIL_UUID_ENCODE(KNEIL_UUID_INFO));
+static struct bt_uuid_128 uuid_summary = BT_UUID_INIT_128(KNEIL_UUID_ENCODE(KNEIL_UUID_SUMMARY));
 
 /* address we are looking for (also reported when the device has no KNEIL name) */
 static volatile bool scan_target_set;
@@ -348,6 +353,7 @@ static void mtu_cb(struct bt_conn *c, uint8_t err, struct bt_gatt_exchange_param
 
 static uint16_t h_live, h_live_ccc, h_raw, h_raw_ccc, h_ctrl;
 static uint16_t h_info, h_info_ccc;   /* optional: 0 if the device has no INFO characteristic */
+static uint16_t h_summary, h_summary_ccc;   /* optional (protocol v2): 0 if the device has no SUMMARY */
 
 /* value handle of a characteristic (and its CCC descriptor), 0 if missing */
 static uint16_t dm_handle(struct bt_gatt_dm *dm, const struct bt_uuid *uuid, uint16_t *ccc)
@@ -373,6 +379,7 @@ static void dm_completed(struct bt_gatt_dm *dm, void *ctx)
 	h_raw = dm_handle(dm, &uuid_raw.uuid, &h_raw_ccc);
 	h_ctrl = dm_handle(dm, &uuid_ctrl.uuid, NULL);
 	h_info = dm_handle(dm, &uuid_info.uuid, &h_info_ccc);
+	h_summary = dm_handle(dm, &uuid_summary.uuid, &h_summary_ccc);
 	bt_gatt_dm_data_release(dm);
 	const bool ok = h_live && h_live_ccc && h_raw && h_raw_ccc && h_ctrl;
 
@@ -424,7 +431,7 @@ static void on_subscribed(struct bt_conn *c, uint8_t err, struct bt_gatt_subscri
 	post_link(EV_SUBSCRIBED, err);
 }
 
-static struct bt_gatt_subscribe_params sub_live, sub_raw, sub_info;
+static struct bt_gatt_subscribe_params sub_live, sub_raw, sub_info, sub_summary;
 static struct bt_gatt_write_params wr_params;
 static uint8_t wr_byte;
 
@@ -644,8 +651,12 @@ static void handle_link(const struct link_evt *e, int64_t now)
 		subscribe(&sub_live, h_live, h_live_ccc);
 		subscribe(&sub_raw, h_raw, h_raw_ccc);
 		if (h_info != 0 && h_info_ccc != 0) {
-			subs_needed = 3;
+			subs_needed++;
 			subscribe(&sub_info, h_info, h_info_ccc);
+		}
+		if (h_summary != 0 && h_summary_ccc != 0) {
+			subs_needed++;
+			subscribe(&sub_summary, h_summary, h_summary_ccc);
 		}
 		break;
 
@@ -977,3 +988,4 @@ int main(void)
 	}
 	return 0;
 }
+

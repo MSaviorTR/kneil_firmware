@@ -13,8 +13,13 @@ import threading
 import time
 from typing import List, NamedTuple
 
-import serial
-import serial.tools.list_ports
+try:                    # pyserial: only needed for a real COM port
+    import serial
+    import serial.tools.list_ports
+except ImportError:     # replay, demo and the unit tests run without it
+    serial = None
+
+SerialException = getattr(serial, 'SerialException', OSError)
 
 from . import protocol as P
 from .recording import TRUTH_LINE, read_session
@@ -31,6 +36,8 @@ class PortInfo(NamedTuple):
 
 
 def list_ports() -> List[PortInfo]:
+    if serial is None:
+        return []
     ports = []
     for p in serial.tools.list_ports.comports():
         bridge = p.vid == P.BRIDGE_USB_VID and p.pid == P.BRIDGE_USB_PID
@@ -67,10 +74,12 @@ class SerialTransport:
         return time.monotonic()
 
     def open(self) -> None:
+        if serial is None:
+            raise TransportError('pyserial is not installed: pip install pyserial (only needed for a COM port)')
         try:
             # pyserial sets DTR when it opens the port: the bridge only sends while DTR is on
             self._ser = serial.Serial(self.port, P.BAUD_RATE, timeout=0.1, write_timeout=1.0)
-        except (serial.SerialException, OSError, ValueError) as exc:
+        except (SerialException, OSError, ValueError) as exc:
             raise TransportError(_open_error(self.port, exc)) from None
         self._thread = threading.Thread(target=self._run, name='serial-reader', daemon=True)
         self._thread.start()
@@ -85,7 +94,7 @@ class SerialTransport:
         if self._ser is not None:
             try:
                 self._ser.close()
-            except (serial.SerialException, OSError):
+            except (SerialException, OSError):
                 pass
 
     def _run(self) -> None:
@@ -111,7 +120,7 @@ class SerialTransport:
                 if len(buf) > 4096:             # no line end for a long time: not our device
                     self.out.put(('error', f'{self.port}: data without line ends, discarded'))
                     buf.clear()
-        except (serial.SerialException, OSError) as exc:
+        except (SerialException, OSError) as exc:
             if not self._stop.is_set():
                 self.out.put(('error', f'{self.port} stopped working ({exc}). Was the bridge unplugged?'))
                 self.out.put(('closed', 'error'))
