@@ -2,6 +2,9 @@
 #include <string.h>
 #include "kneil_proto.h"
 
+/* format 2 must stay 40 bytes (compile-time check that works in C99 too) */
+typedef char kneil_summary_size_check[(sizeof(kneil_summary_t) == KNEIL_SUMMARY_LEN - 1) ? 1 : -1];
+
 /* ---------- little-endian helpers ---------- */
 static void put_u16(uint8_t *b, uint16_t v)
 {
@@ -30,7 +33,7 @@ static uint32_t get_u32(const uint8_t *b)
 /* ---------- binary packets ---------- */
 int kneil_live_encode(const kneil_live_t *p, uint8_t *b, size_t size)
 {
-	if (size < KNEIL_LIVE_LEN) {
+	if (size < KNEIL_LIVE_V2_LEN) {
 		return -1;
 	}
 	b[0] = KNEIL_PKT_LIVE;
@@ -45,14 +48,23 @@ int kneil_live_encode(const kneil_live_t *p, uint8_t *b, size_t size)
 		put_u16(b + 12 + 2 * k, (uint16_t)p->mean_mg[k]);
 	}
 	put_u16(b + 18, p->battery_mv);
-	return KNEIL_LIVE_LEN;
+	b[20] = p->raw_cls;
+	b[21] = p->events;
+	return KNEIL_LIVE_V2_LEN;
 }
 
 int kneil_live_decode(const uint8_t *b, size_t len, kneil_live_t *p)
 {
-	if (len != KNEIL_LIVE_LEN || b[0] != KNEIL_PKT_LIVE || b[1] != KNEIL_PROTO_VERSION) {
+	if (b[0] != KNEIL_PKT_LIVE) {
 		return -1;
 	}
+	const int v2 = (len == KNEIL_LIVE_V2_LEN && b[1] == KNEIL_PROTO_VERSION);
+	const int v1 = (len == KNEIL_LIVE_V1_LEN && b[1] == 1);
+
+	if (!v1 && !v2) {
+		return -1;
+	}
+	p->version = v2 ? 2 : 1;
 	p->seq = get_u16(b + 2);
 	p->t_ms = get_u32(b + 4);
 	p->cls = b[8];
@@ -63,6 +75,8 @@ int kneil_live_decode(const uint8_t *b, size_t len, kneil_live_t *p)
 		p->mean_mg[k] = (int16_t)get_u16(b + 12 + 2 * k);
 	}
 	p->battery_mv = get_u16(b + 18);
+	p->raw_cls = v2 ? b[20] : KNEIL_CLASS_NONE;
+	p->events = v2 ? b[21] : 0;
 	return 0;
 }
 
@@ -103,6 +117,55 @@ int kneil_raw_decode(const uint8_t *b, size_t len, kneil_raw_t *p)
 			p->xyz_mg[i][k] = (int16_t)get_u16(b + KNEIL_RAW_HDR_LEN + 6 * i + 2 * k);
 		}
 	}
+	return 0;
+}
+
+int kneil_summary_encode(const kneil_summary_t *s, uint8_t *b, size_t size)
+{
+	if (size < KNEIL_SUMMARY_LEN) {
+		return -1;
+	}
+	b[0] = KNEIL_PKT_SUMMARY;
+	b[1] = s->format;
+	b[2] = s->n_classes;
+	for (int k = 0; k < KNEIL_SUMMARY_CLASSES; k++) {
+		put_u16(b + 3 + 2 * k, s->minutes_by_class[k]);
+	}
+	put_u16(b + 19, s->minutes_sitting);
+	put_u16(b + 21, s->minutes_standing);
+	put_u16(b + 23, s->minutes_still_unknown);
+	put_u16(b + 25, s->n_sit_to_stand);
+	put_u16(b + 27, s->n_stand_to_sit);
+	put_u16(b + 29, s->n_bed_transfer);
+	put_u16(b + 31, s->sts_seconds_x10);
+	put_u16(b + 33, s->steps);
+	put_u16(b + 35, s->cadence_x10);
+	put_u16(b + 37, s->stairs_cadence_x10);
+	put_u16(b + 39, (uint16_t)s->sit_tilt_x10);
+	return KNEIL_SUMMARY_LEN;
+}
+
+int kneil_summary_decode(const uint8_t *b, size_t len, kneil_summary_t *s)
+{
+	if (len != KNEIL_SUMMARY_LEN || b[0] != KNEIL_PKT_SUMMARY) {
+		return -1;
+	}
+	s->format = b[1];
+	s->n_classes = b[2];
+	for (int k = 0; k < KNEIL_SUMMARY_CLASSES; k++) {
+		s->minutes_by_class[k] = get_u16(b + 3 + 2 * k);
+	}
+	s->minutes_sitting = get_u16(b + 19);
+	s->minutes_standing = get_u16(b + 21);
+	s->minutes_still_unknown = get_u16(b + 23);
+	s->n_sit_to_stand = get_u16(b + 25);
+	s->n_stand_to_sit = get_u16(b + 27);
+	s->n_bed_transfer = get_u16(b + 29);
+	s->sts_seconds_x10 = get_u16(b + 31);
+	s->steps = get_u16(b + 33);
+	s->cadence_x10 = get_u16(b + 35);
+	s->stairs_cadence_x10 = get_u16(b + 37);
+	s->sit_tilt_x10 = (int16_t)get_u16(b + 39);
 	return 0;
 }
 
@@ -188,6 +251,12 @@ int kneil_live_to_line(const kneil_live_t *p, char *out, size_t size)
 	}
 	put_ch(&o, ',');
 	put_uint(&o, p->battery_mv);
+	if (p->version >= 2) {          /* v2 adds the raw class and the event flags */
+		put_ch(&o, ',');
+		put_uint(&o, p->raw_cls);
+		put_ch(&o, ',');
+		put_uint(&o, p->events);
+	}
 	return finish(&o, out);
 }
 
@@ -210,6 +279,46 @@ int kneil_raw_to_line(const kneil_raw_t *p, char *out, size_t size)
 			put_int(&o, p->xyz_mg[i][k]);
 		}
 	}
+	return finish(&o, out);
+}
+
+int kneil_summary_to_line(const kneil_summary_t *s, char *out, size_t size)
+{
+	if (size < 2) {
+		return -1;
+	}
+	out_t o = {out, out + size - 1, 1};
+
+	put_str(&o, "D,");
+	put_uint(&o, s->format);
+	put_ch(&o, ',');
+	put_uint(&o, s->n_classes);
+	for (int k = 0; k < KNEIL_SUMMARY_CLASSES; k++) {
+		put_ch(&o, ',');
+		put_uint(&o, s->minutes_by_class[k]);
+	}
+	put_ch(&o, ',');
+	put_uint(&o, s->minutes_sitting);
+	put_ch(&o, ',');
+	put_uint(&o, s->minutes_standing);
+	put_ch(&o, ',');
+	put_uint(&o, s->minutes_still_unknown);
+	put_ch(&o, ',');
+	put_uint(&o, s->n_sit_to_stand);
+	put_ch(&o, ',');
+	put_uint(&o, s->n_stand_to_sit);
+	put_ch(&o, ',');
+	put_uint(&o, s->n_bed_transfer);
+	put_ch(&o, ',');
+	put_uint(&o, s->sts_seconds_x10);
+	put_ch(&o, ',');
+	put_uint(&o, s->steps);
+	put_ch(&o, ',');
+	put_uint(&o, s->cadence_x10);
+	put_ch(&o, ',');
+	put_uint(&o, s->stairs_cadence_x10);
+	put_ch(&o, ',');
+	put_int(&o, s->sit_tilt_x10);
 	return finish(&o, out);
 }
 
@@ -262,6 +371,10 @@ int kneil_cmd_to_ctrl(const char *line)
 		return KNEIL_CTRL_RAW_STOP;
 	case 'T':
 		return KNEIL_CTRL_SELFTEST;
+	case 'Q':
+		return KNEIL_CTRL_SUMMARY;
+	case 'Z':
+		return KNEIL_CTRL_RESET;
 	default:
 		return -1;
 	}

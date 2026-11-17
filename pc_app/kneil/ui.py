@@ -41,7 +41,15 @@ def _rgba(colour: str):
     return c.red(), c.green(), c.blue(), 255
 
 
-LUT = np.array([_rgba(c) for c in P.CLASS_COLOURS] + [_rgba(P.NONE_COLOUR)] * (256 - P.N_CLASSES), dtype=np.uint8)
+LUT_V1 = np.array([_rgba(c) for c in P.CLASS_COLOURS] + [_rgba(P.NONE_COLOUR)] * (256 - P.N_CLASSES_V1),
+                   dtype=np.uint8)
+LUT_V2 = np.array([_rgba(c) for c in P.CLASS_COLOURS_V2] + [_rgba(P.NONE_COLOUR)] * (256 - P.N_CLASSES_V2),
+                   dtype=np.uint8)
+
+
+def _lut(version: int):
+    """Colour table of the timeline: v1 has 9 classes, v2 has 8 (still is one colour)."""
+    return LUT_V2 if version >= 2 else LUT_V1
 
 
 def _text_on(colour: str) -> str:
@@ -203,11 +211,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.record_btn.clicked.connect(self.toggle_recording)
         self.folder_btn = QtWidgets.QPushButton('Folder...')
         self.folder_btn.clicked.connect(self.choose_folder)
+        self.summary_btn = QtWidgets.QPushButton('Daily summary')
+        self.summary_btn.setToolTip('Ask the device for the daily summary (command Q)')
+        self.summary_btn.clicked.connect(lambda: self.send(P.CMD_SUMMARY))
+        self.reset_day_btn = QtWidgets.QPushButton('Reset day')
+        self.reset_day_btn.setToolTip('Reset the daily metrics in the device (command Z)')
+        self.reset_day_btn.clicked.connect(lambda: self.send(P.CMD_RESET))
         self.rec_label = QtWidgets.QLabel('')
         _bold(self.rec_label, 10)
         row.addWidget(self.stats_label)
         row.addStretch(1)
         row.addWidget(self.rec_label)
+        row.addWidget(self.summary_btn)
+        row.addWidget(self.reset_day_btn)
         row.addWidget(self.record_btn)
         row.addWidget(self.folder_btn)
         v.addLayout(row)
@@ -237,8 +253,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.flags_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.age_label = QtWidgets.QLabel('')
         self.age_label.setStyleSheet('color: #d93025; font-weight: bold;')
+        self.summary_label = QtWidgets.QLabel('daily summary: not received yet')
+        self.summary_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.summary_label.setWordWrap(True)
         for w in (self.big, self.upright, self.raw_label, self.vote_label, self.mean_label, self.flags_label,
-                  self.age_label):
+                  self.age_label, self.summary_label):
             v.addWidget(w)
 
         truth = QtWidgets.QGroupBox('Ground truth: what are you really doing? (keys)')
@@ -313,12 +332,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tl_plot.setYRange(0, 1, padding=0)
         v.addWidget(self.tl_plot)
         legend = QtWidgets.QHBoxLayout()
-        for c in range(P.N_CLASSES):
-            legend.addWidget(self._chip(P.class_label(c), P.class_colour(c)))
-        legend.addWidget(self._chip('no data', P.NONE_COLOUR))
-        legend.addStretch(1)
+        self.legend_layout = legend
+        self.legend_version = 0
+        self._update_legend()
         v.addLayout(legend)
         return box
+
+    def _update_legend(self) -> None:
+        """The legend follows the protocol version of the last LIVE packet (9 classes in v1, 8 in v2)."""
+        version = self.session.version
+        if version == self.legend_version:
+            return
+        self.legend_version = version
+        while self.legend_layout.count():
+            item = self.legend_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for c in range(len(P.class_names(version))):
+            self.legend_layout.addWidget(self._chip(P.class_label(c, version), P.class_colour(c, version)))
+        self.legend_layout.addWidget(self._chip('no data', P.NONE_COLOUR))
+        self.legend_layout.addStretch(1)
 
     @staticmethod
     def _chip(text: str, colour: str) -> QtWidgets.QLabel:
@@ -673,12 +707,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _show_live(self, p: P.Live) -> None:
         s = p.cls_smooth
+        v = p.version
         if s == P.CLASS_NONE:
             self._set_big('starting', P.NONE_COLOUR)
         else:
-            self._set_big(P.class_label(s), P.class_colour(s))
-        self.upright.setText('upright and still' if s in P.UPRIGHT_AND_STILL else '')
-        self.raw_label.setText(f'raw class (newest window): {P.class_label(p.cls)}')
+            label = P.class_label(s, v)
+            if v >= 2 and s == 3:
+                label = f'still ({P.posture_name(p.still_posture)})'
+            self._set_big(label, P.class_colour(s, v))
+        if v >= 2:
+            self.upright.setText(f'protocol v{v}, 4 s window; posture: {P.posture_name(p.still_posture)}')
+        else:
+            self.upright.setText('upright and still' if s in P.UPRIGHT_AND_STILL else '')
+        raw = P.class_label(p.raw_cls if v >= 2 else p.cls, v)
+        self.raw_label.setText(f'raw class (newest window, before the stairs rule): {raw}' if v >= 2
+                               else f'raw class (newest window): {raw}')
         self.vote_label.setText('vote share: ' + (f'{p.vote_pct} % of the trees' if p.vote_pct != P.VOTE_NONE
                                                    else 'not available'))
         mag = float(np.linalg.norm(p.mean_mg))
@@ -687,6 +730,23 @@ class MainWindow(QtWidgets.QMainWindow):
         selftest = 'passed' if p.selftest_ok else '<b style="color:#d93025">FAILED</b>'
         self.flags_label.setText(f'self-test: {selftest} &nbsp; input low-pass: {"on" if p.lowpass else "off"} '
                                  f'&nbsp; model: {"single tree" if p.small_model else "forest"}')
+        self._show_summary()
+
+    def _show_summary(self) -> None:
+        """The latest daily summary (format 2), decoded."""
+        s = self.session.summary
+        if s is None:
+            self.summary_label.setText('daily summary: not received yet')
+            return
+        ev = (f'sit-to-stand {s.n_sit_to_stand}, stand-to-sit {s.n_stand_to_sit}, '
+              f'bed transfer {s.n_bed_transfer}')
+        self.summary_label.setText(
+            f'<b>Daily summary</b> (format {s.format}, {s.n_classes} classes): '
+            f'walking {s.minutes_by_class[0]} min, stairs {s.minutes_by_class[1]}/{s.minutes_by_class[2]} min, '
+            f'still {s.minutes_still} min (sit {s.minutes_sitting} / stand {s.minutes_standing} / '
+            f'unknown {s.minutes_still_unknown}), lying {s.minutes_by_class[4]} min<br>{ev}, '
+            f'mean sit-to-stand {s.sts_seconds_x10 / 10:.1f} s, steps {s.steps}, '
+            f'cadence {s.cadence_x10 / 10:.1f}/min, seated tilt {s.sit_tilt_x10 / 10:.1f} deg')
 
     def _set_big(self, text: str, colour: str) -> None:
         self.big.setText(text)
@@ -754,10 +814,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_timeline(self) -> None:
         classes = self.session.timeline.array()
-        rgba = LUT[classes][np.newaxis, :, :]
+        rgba = _lut(self.session.version)[classes][np.newaxis, :, :]
         self.tl_img.setImage(rgba, autoLevels=False, levels=(0, 255))
         n = len(classes)
         self.tl_img.setRect(QtCore.QRectF(-n, 0, n, 1))
+        self._update_legend()
 
     def _update_totals(self) -> None:
         t = self.session.totals

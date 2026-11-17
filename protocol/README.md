@@ -1,4 +1,4 @@
-# KNEIL live protocol (version 1)
+# KNEIL live protocol (version 2)
 
 How the KNEIL board, the XIAO bridge and the PC app talk to each other. There are two implementations that
 **must stay identical**:
@@ -8,6 +8,23 @@ How the KNEIL board, the XIAO bridge and the PC app talk to each other. There ar
 
 Units: acceleration in **mg** (int16). Device frame: x anterior, y subject's left, z superior. Multi-byte values
 are **little-endian**. `t_ms` = milliseconds since the device booted (uint32).
+
+## Version 2 (17 Nov 2026, step E)
+The model is 8 classes with a 4 s window (V4). Changes against version 1, which stays supported:
+- **LIVE v2 is 22 bytes** (version byte = 2). Bytes 0-19 as v1, but byte 8 is the class **after the stairs rule**
+  (0-7) and byte 10 the vote share of the **raw** class; byte 20 = raw class (argmax before the rule, 255 = none);
+  byte 21 = event flags: bit0 sit-to-stand counted in that window, bit1 stand-to-sit, bit2 bed transfer, bits 4-5
+  posture (0 unknown, 1 sitting, 2 standing). The decoder accepts a 20-byte v1 packet too.
+- **SUMMARY packet** (`type 4`, 41 bytes): `uint8 type` + the 40-byte daily summary, format 2 (minutes per class,
+  the still minutes split by posture, event counts, mean sit-to-stand time, steps, cadences, seated tilt). New
+  characteristic `a8f50006-...` (notify); needs ATT MTU >= 44. Sent when the central subscribes, every 60 s while
+  connected, and on CONTROL `0x13`.
+- **Text lines**: the `L` line gains two values at the end for v2 messages (`<raw_class>,<event_flags>`); the new
+  `D,<format>,...` line carries the summary. Commands `Q` (`0x13`, send the summary now) and `Z` (`0x14`, reset the
+  daily metrics) join `S`, `P`, `T`.
+- Classes in v2: 0 walking, 1 stairs_up, 2 stairs_down, 3 still, 4 lying, 5 sit_to_stand, 6 stand_to_sit,
+  7 bed_transfer. The class table, the window length (4 s) and the window centre (2 s before `t_ms`) follow the LIVE
+  version byte; v1 keeps 9 classes, a 2 s window and a 1 s centre.
 
 ## A. Bluetooth LE (binary)
 Advertised name `KNEIL-xxxx` (last 4 hex digits of the device address). The 128-bit service UUID is in the scan

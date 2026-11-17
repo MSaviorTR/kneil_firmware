@@ -5,10 +5,15 @@ small USB board is the link between the KNEIL board and the PC viewer (`../pc_ap
 (nRF Connect SDK v3.1.0, board `xiao_ble`); files: `src/main.c` (all of the bridge), `prj.conf`, `CMakeLists.txt`
 (also compiles the shared protocol code `../protocol/kneil_proto.c`), `flash_bridge.ps1`. Current version: 0.3.0.
 
-The XIAO is a BLE central. It connects to a `KNEIL-xxxx` device, subscribes to LIVE, RAW and INFO (if the
-device has it), and writes each packet to its USB serial port as the text lines of the KNEIL live protocol
-(`L`, `R`, `I`). Commands `S`, `P`, `T` from the PC are written to CONTROL (`0x10`, `0x11`, `0x12`).
-The bridge adds only its own `B` lines.
+The XIAO is a BLE central. It connects to a `KNEIL-xxxx` device, subscribes to LIVE, RAW and, when the device has
+them, INFO and SUMMARY (`a8f50006-...`), and writes each packet to its USB serial port as the text lines of the
+KNEIL live protocol (`L`, `R`, `I`, `D`). LIVE v1 (20 bytes) and v2 (22 bytes, step E) are both accepted, so an
+older board still works. Commands `S`, `P`, `T`, `Q`, `Z` from the PC are written to CONTROL (`0x10`, `0x11`, `0x12`,
+`0x13`, `0x14`). The bridge adds only its own `B` lines.
+
+SUMMARY (UUID `a8f50006-3e2c-4c6e-9b1a-6b4e45494c00`, notify; added 17 Nov 2026) carries the 40-byte daily summary
+(format 2); it is written as a `D,...` line. The bridge subscribes to it when the device has it and forwards it like
+any other packet.
 
 INFO (UUID `a8f50005-3e2c-4c6e-9b1a-6b4e45494c00`, notify; added 16 Nov 2026) carries the device's information
 lines: a packet is `0x03` followed by 1-100 characters of text, written as `I,<text>`. The device sends a
