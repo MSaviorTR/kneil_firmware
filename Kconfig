@@ -1,0 +1,9 @@
+# NeiL application options. The kneil_tinyml library options are in zephyr/Kconfig.
+
+config NEIL_APP_KNEIL_LIVE
+	bool "KNEIL live app (src/kneil_live.c) instead of the NeiL BLE app (src/main.c)"
+	help
+	  Set in kneil.conf. Runs the kneil_tinyml activity classifier on the
+	  BMA580 data and streams the results (KNEIL live protocol).
+
+source "Kconfig.zephyr"

@@ -1,0 +1,10 @@
+/*
+ * App-level overlay for the custom board: run the I2C bus at 100 kHz
+ * (I2C_BITRATE_STANDARD) instead of the driver default, to rule out bus
+ * speed as a factor while debugging the sensors. Pin assignment and
+ * everything else still comes from the board's own devicetree.
+ */
+
+&i2c21 {
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+};

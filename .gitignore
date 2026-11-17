@@ -1,0 +1,16 @@
+# Zephyr / NCS build folders (firmware and bridge)
+build*/
+
+# PC app: PyInstaller output and generated spec, Python caches, local environments
+pc_app/dist/
+*.spec
+__pycache__/
+*.pyc
+.venv/
+
+# recordings and local tool settings
+*_session.txt
+*_live.csv
+*_raw.csv
+.claude/
+.vscode/

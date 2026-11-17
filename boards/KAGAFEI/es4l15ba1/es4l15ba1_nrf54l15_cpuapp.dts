@@ -1,0 +1,66 @@
+/dts-v1/;
+#include <nordic/nrf54l15_cpuapp.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include "es4l15ba1-pinctrl.dtsi"
+
+/ {
+	model = "es4l15ba1";
+	compatible = "KAGAFEI,es4l15ba1-cpuapp";
+
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+		zephyr,sram = &cpuapp_sram;
+		zephyr,flash = &cpuapp_rram;
+		zephyr,flash-controller = &rram_controller;
+	};
+};
+
+&grtc {
+	owned-channels = <0 1 2 3 4 5 6 7 8 9 10 11>;
+	/* Channels 7-11 reserved for Zero Latency IRQs, 3-4 for FLPR */
+	child-owned-channels = <3 4 7 8 9 10 11>;
+	status = "okay";
+};
+
+&cpuapp_sram {
+	status = "okay";
+};
+
+&rram_controller {
+	status = "okay";
+};
+
+/*
+ * Required for the CLOCK_CONTROL_NRF Kconfig menu (32kHz clock source
+ * selection) to be visible at all - see prj.conf for why the RC oscillator
+ * is selected as the LFCLK source on this crystal-less module.
+ */
+&clock {
+	status = "okay";
+};
+
+/*
+ * Switch the main regulator from the default LDO to DC/DC mode. The
+ * datasheet requires a 4.7uH inductor across PAD2 (DECD) / PAD21 (DCC) for
+ * exactly this purpose (section 11.2.3) - without this, that inductor is
+ * populated on the board but unused, and the SoC runs on the less efficient
+ * LDO the whole time, most noticeably during radio TX.
+ */
+&regulators {
+	status = "okay";
+};
+
+&vregmain {
+	status = "okay";
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&i2c21 {
+	status = "okay";
+	pinctrl-0 = <&i2c21_default>;
+	pinctrl-1 = <&i2c21_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+#include <nordic/nrf54l15_partition.dtsi>

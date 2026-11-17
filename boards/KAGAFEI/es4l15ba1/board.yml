@@ -1,0 +1,8 @@
+board:
+  name: es4l15ba1
+  vendor: KAGAFEI
+  socs:
+  - name: nrf54l15
+    variants:
+    - name: xip
+      cpucluster: cpuflpr
