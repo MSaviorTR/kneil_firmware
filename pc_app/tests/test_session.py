@@ -98,8 +98,9 @@ class V2Session(unittest.TestCase):
     def test_device_column_mapping(self):
         self.assertEqual(P.device_column(3, 1 << P.EV_POSTURE_SHIFT, 2), 3)     # still + sitting
         self.assertEqual(P.device_column(3, 2 << P.EV_POSTURE_SHIFT, 2), 4)     # still + standing
-        self.assertEqual(P.device_column(3, 0, 2), 3)                           # still + unknown
+        self.assertEqual(P.device_column(3, 0, 2), P.DEVICE_STILL_UNKNOWN)      # still + unknown posture
         self.assertEqual([P.device_column(c, 0, 2) for c in (0, 1, 2, 4, 5, 6, 7)], [0, 1, 2, 5, 6, 7, 8])
+        self.assertEqual(P.device_column(3, 0, 2, unknown_col=3), 3)            # the totals table keeps its mapping
         self.assertEqual(P.device_column(4, 0, 1), 4)                           # v1 unchanged
 
     def test_confusion_counts_still_by_posture(self):
@@ -112,6 +113,21 @@ class V2Session(unittest.TestCase):
         s2.truth.set(4, 0.0)                                    # the user stands
         s2.handle(self.live2(0, 12000, 3, events=2 << P.EV_POSTURE_SHIFT), now=12.0)
         self.assertEqual(s2.conf_raw.m[4, 4], 1)                # truth standing, device still + standing
+        s3 = Session()
+        s3.truth.set(3, 0.0)
+        s3.handle(self.live2(0, 12000, 3, events=0), now=12.0)  # still, posture unknown
+        self.assertEqual(s3.conf_raw.m[3, P.DEVICE_STILL_UNKNOWN], 1)
+        self.assertEqual(s3.conf_raw.m[3, 3], 0)                # never counted as sitting
+        self.assertEqual(s3.conf_raw.sitting(), (None, 0))      # no window with a known posture
+        self.assertEqual(s3.conf_raw.posture_unknown(), (100.0, 1))
+        self.assertEqual(s3.conf_raw.upright_and_still(), (100.0, 1))
+        s4 = Session()
+        s4.truth.set(3, 0.0)
+        s4.handle(self.live2(0, 12000, 3, events=1 << P.EV_POSTURE_SHIFT), now=12.0)
+        s4.handle(self.live2(1, 13000, 3, events=0), now=13.0)
+        sit, n = s4.conf_raw.sitting()
+        self.assertEqual((round(sit, 1), n), (100.0, 1))        # the unknown-posture window is not in the denominator
+        self.assertEqual(s4.conf_raw.posture_unknown(), (50.0, 2))
 
     def test_events_come_from_the_flags(self):
         t = Totals()
@@ -140,6 +156,41 @@ class V2Session(unittest.TestCase):
         self.assertEqual(s.summary.minutes_still, 4)
         self.assertIn('daily summary', s.handle(P.Summary(2, 8, (0,) * 8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
                                                 now=2.0)[0])
+
+
+    def test_still_with_unknown_posture_is_its_own_column(self):
+        s = Session()
+        s.truth.set(3, 0.0)
+        s.handle(self.live2(0, 12000, 3, events=0), now=12.0)
+        self.assertEqual(s.conf_raw.m[3, P.DEVICE_STILL_UNKNOWN], 1)
+        self.assertEqual(int(s.conf_raw.m[3, 3]), 0)
+        self.assertEqual(s.conf_raw.sitting(), (None, 0))
+        self.assertEqual(s.conf_raw.standing(), (None, 0))
+        self.assertEqual(s.conf_raw.posture_unknown(), (100.0, 1))
+        self.assertEqual(s.conf_raw.upright_and_still(), (100.0, 1))
+
+    def test_known_posture_sitting_and_standing(self):
+        s = Session()
+        s.truth.set(3, 0.0)
+        s.handle(self.live2(0, 12000, 3, events=1 << P.EV_POSTURE_SHIFT), now=12.0)
+        s.handle(self.live2(1, 13000, 3, events=0), now=13.0)          # same truth, posture unknown
+        sit, n = s.conf_raw.sitting()
+        self.assertEqual((round(sit, 1), n), (100.0, 1))              # denominator: known postures only
+        self.assertEqual(s.conf_raw.posture_unknown(), (50.0, 2))
+        s2 = Session()
+        s2.truth.set(4, 0.0)
+        s2.handle(self.live2(0, 12000, 3, events=2 << P.EV_POSTURE_SHIFT), now=12.0)
+        self.assertEqual(s2.conf_raw.standing(), (100.0, 1))
+        self.assertEqual(s2.conf_raw.sitting(), (None, 0))
+
+    def test_totals_keep_the_old_still_split(self):
+        t = Totals()
+        t.add(3, 1 << P.EV_POSTURE_SHIFT, 2)
+        t.add(3, 2 << P.EV_POSTURE_SHIFT, 2)
+        t.add(3, 0, 2)                                                # unknown posture still counts as still time
+        self.assertEqual((t.seconds_sitting, t.seconds_standing, t.seconds_still_unknown), (1, 1, 1))
+        self.assertEqual(sum(t.seconds[:2]), 0)
+        self.assertEqual(t.seconds[3] + t.seconds[4] + 0, 3)           # 1 sitting + 1 standing + 1 unknown (as sitting)
 
 
 if __name__ == '__main__':

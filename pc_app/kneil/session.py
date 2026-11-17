@@ -68,16 +68,16 @@ class ClockMap:
 
 
 class Confusion:
-    """Truth rows (9 classes + other) x device columns (9 classes), counted in windows."""
+    """Truth rows (9 classes + other) x device columns (9 v1 classes + 'still, posture unknown' for v2)."""
 
     def __init__(self):
         self.reset()
 
     def reset(self) -> None:
-        self.m = np.zeros((len(TRUTH_LABELS), P.N_CLASSES), dtype=int)
+        self.m = np.zeros((len(TRUTH_LABELS), P.N_DEVICE_COLUMNS), dtype=int)
 
     def add(self, truth: Optional[int], cls: int) -> None:
-        if truth is not None and 0 <= truth < len(TRUTH_LABELS) and 0 <= cls < P.N_CLASSES:
+        if truth is not None and 0 <= truth < len(TRUTH_LABELS) and 0 <= cls < P.N_DEVICE_COLUMNS:
             self.m[truth, cls] += 1
 
     @staticmethod
@@ -88,15 +88,31 @@ class Confusion:
         return self._ratio(self.m[0, 0], self.m[0].sum())
 
     def upright_and_still(self):
+        """Truth sitting or standing vs the device still class with any posture (the old, posture-free view)."""
         rows = list(P.UPRIGHT_AND_STILL)
-        return self._ratio(self.m[np.ix_(rows, rows)].sum(), self.m[rows].sum())
+        cols = rows + [P.DEVICE_STILL_UNKNOWN]
+        return self._ratio(self.m[np.ix_(rows, cols)].sum(), self.m[rows].sum())
+
+    def sitting(self):
+        """Truth sitting vs device still + posture sitting, over the windows with a known posture."""
+        known = int(self.m[3].sum() - self.m[3, P.DEVICE_STILL_UNKNOWN])
+        return self._ratio(int(self.m[3, 3]), known)
+
+    def standing(self):
+        known = int(self.m[4].sum() - self.m[4, P.DEVICE_STILL_UNKNOWN])
+        return self._ratio(int(self.m[4, 4]), known)
+
+    def posture_unknown(self):
+        """Share of the device's still windows whose posture is unknown (v2 only)."""
+        still_cols = list(P.UPRIGHT_AND_STILL) + [P.DEVICE_STILL_UNKNOWN]
+        return self._ratio(int(self.m[:, P.DEVICE_STILL_UNKNOWN].sum()), int(self.m[:, still_cols].sum()))
 
     def overall(self, merge_sit_stand: bool = False):
-        classes = self.m[:P.N_CLASSES]                         # 'other' is not counted
+        classes = self.m[:P.N_CLASSES, :P.N_CLASSES]           # 'other' and the 10th column are not counted
         hit = int(np.trace(classes))
         if merge_sit_stand:
             hit += int(classes[3, 4] + classes[4, 3])
-        return self._ratio(hit, classes.sum())
+        return self._ratio(hit, int(self.m[:P.N_CLASSES].sum()))
 
 
 class SeqTracker:
@@ -231,7 +247,7 @@ class Totals:
 
     def add(self, cls: int, events: int = 0, version: int = 1) -> None:
         if version >= 2:
-            col = P.device_column(cls, events, 2)      # still -> sitting / standing by the posture
+            col = P.device_column(cls, events, 2, unknown_col=3)   # totals keep the old sitting/standing/unknown split
             if col < P.N_CLASSES:
                 self.seconds[col] += 1
             if cls == 3 and P.posture(events) == 0:

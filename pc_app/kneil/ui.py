@@ -417,8 +417,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.acc_label = QtWidgets.QLabel('')
         self.acc_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         v.addWidget(self.acc_label)
-        self.conf_table = QtWidgets.QTableWidget(len(TRUTH_LABELS), P.N_CLASSES)
-        self.conf_table.setHorizontalHeaderLabels([P.class_label(c) for c in range(P.N_CLASSES)])
+        self.conf_table = QtWidgets.QTableWidget(len(TRUTH_LABELS), P.N_DEVICE_COLUMNS)
+        self.conf_table.setHorizontalHeaderLabels([P.class_label(c) for c in range(P.N_CLASSES)]
+                                                 + ['still (posture ?)'])
         self.conf_table.setVerticalHeaderLabels([f'{KEY_FOR_TRUTH[c]} {TRUTH_LABELS[c]}'
                                                  for c in range(len(TRUTH_LABELS))])
         self.conf_table.verticalHeader().setDefaultSectionSize(20)
@@ -426,14 +427,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.conf_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         self.conf_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         for r in range(len(TRUTH_LABELS)):
-            for c in range(P.N_CLASSES):
+            for c in range(P.N_DEVICE_COLUMNS):
                 cell = QtWidgets.QTableWidgetItem('')
                 cell.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
                 self.conf_table.setItem(r, c, cell)
         v.addWidget(self.conf_table)
-        note = QtWidgets.QLabel('Rows: your truth key at the centre of the 2 s window. Columns: what the device said. '
-                                'Each cell: windows (share of the row). Green: correct; blue: sitting and standing '
-                                'swapped (correct as "upright and still"); red: wrong.')
+        note = QtWidgets.QLabel('Rows: your truth key at the centre of the classified window (2 s before the end for '
+                                'v2, 1 s for v1). Columns: what the device said. Each cell: windows (share of the '
+                                'row). Green: correct; blue: sitting and standing swapped (correct as "upright and '
+                                'still"); violet: the device said still but its posture was unknown (v2 only); red: '
+                                'wrong.')
         note.setWordWrap(True)
         note.setStyleSheet('color: #888888;')
         v.addWidget(note)
@@ -832,8 +835,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_confusion(self) -> None:
         conf = self.session.conf_raw if self.compare_combo.currentData() == 'raw' else self.session.conf_smooth
         m = conf.m
+        self.conf_table.setColumnHidden(P.DEVICE_STILL_UNKNOWN, self.session.version < 2)
         self.acc_label.setText(
             f'walking: {_pct(conf.walking())} &nbsp;&nbsp; upright and still: {_pct(conf.upright_and_still())}'
+            f'<br>sitting: {_pct(conf.sitting())} &nbsp;&nbsp; standing: {_pct(conf.standing())} '
+            f'(known posture only) &nbsp;&nbsp; posture unknown: {_pct(conf.posture_unknown())} of the still windows'
             f'<br>overall: {_pct(conf.overall())}; with sitting and standing as one: '
             f'{_pct(conf.overall(merge_sit_stand=True))}')
         for r in range(m.shape[0]):
@@ -851,6 +857,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     colour = '#c8f0c8'
                 elif r in P.UPRIGHT_AND_STILL and c in P.UPRIGHT_AND_STILL:
                     colour = '#cfe5fb'
+                elif c == P.DEVICE_STILL_UNKNOWN and r in P.UPRIGHT_AND_STILL:
+                    colour = '#e8e0f8'
                 elif r == TRUTH_OTHER:
                     colour = '#e6e6e6'
                 else:

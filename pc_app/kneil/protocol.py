@@ -112,7 +112,11 @@ CLASS_LABELS_V2 = ('walking', 'stairs up', 'stairs down', 'still', 'lying',
 CLASS_COLOURS_V2 = ('#2e9e44', '#ff9a1f', '#c65102', '#2166d6', '#8e44ad', '#f4d03f', '#c9a227', '#8b5a2b')
 N_CLASSES_V1 = len(CLASS_NAMES)
 N_CLASSES_V2 = len(CLASS_NAMES_V2)
-N_CLASSES = N_CLASSES_V1          # the truth/confusion space always has 9 ids (v2 still is split by posture)
+N_CLASSES = N_CLASSES_V1          # the truth space always has 9 ids (v1 classes)
+# Device columns of the confusion table: the 9 v1 ids plus, for v2 only, a 10th column
+# 'still (posture unknown)' so that a still window whose posture is unknown is not counted as sitting.
+DEVICE_STILL_UNKNOWN = 9
+N_DEVICE_COLUMNS = 10
 NONE_COLOUR = '#d0d0d0'
 
 # v1 groupings (also the truth groups)
@@ -174,13 +178,16 @@ def posture(events: int) -> int:
     return (events & EV_POSTURE_MASK) >> EV_POSTURE_SHIFT
 
 
-def device_column(cls: int, events: int = 0, version: int = 1) -> int:
-    """Device class in the 9-id truth/confusion space. For v2 the still class is split by the posture state:
-    still + posture sitting -> 3, still + posture standing -> 4, still + unknown -> 3 (counted as sitting)."""
+def device_column(cls: int, events: int = 0, version: int = 1, unknown_col: int = DEVICE_STILL_UNKNOWN) -> int:
+    """Device class in the confusion-table space. For v2 the still class is split by the posture state:
+    still + posture sitting -> 3, still + posture standing -> 4, still + posture unknown -> `unknown_col`
+    (the 10th column, DEVICE_STILL_UNKNOWN, so an unknown posture is never counted as sitting). The totals table
+    passes unknown_col=3 (the still time still goes into its sitting/standing/unknown counters)."""
     if version < 2:
         return cls
     if cls == 3:
-        return 4 if posture(events) == 2 else 3
+        p = posture(events)
+        return 4 if p == 2 else (3 if p == 1 else unknown_col)
     return {4: 5, 5: 6, 6: 7, 7: 8}.get(cls, cls)
 
 
